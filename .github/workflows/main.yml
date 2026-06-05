@@ -1,15 +1,15 @@
-name: github rdp tailscale edition
+name: github rdp tailscale edition (macOS)
 on:
   workflow_dispatch:
     inputs:
       password:
-        description: 'set rdp password'
+        description: 'set remote access password'
         required: true
         default: 'IITS@Maroc#2026'
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: macos-latest
     steps:
       - name: initializing environment
         run: echo "starting server deployment..."
@@ -17,49 +17,91 @@ jobs:
       - name: installing tailscale
         run: |
           echo "downloading tailscale..."
-          invoke-webrequest -uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe' -outfile 'tailscale.exe'
-          start-process -filepath "tailscale.exe" -argumentlist "/quiet" -wait
+          curl -o tailscale.pkg 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.pkg'
+          echo "installing tailscale..."
+          sudo installer -pkg tailscale.pkg -target /
           echo "waiting for service..."
-          start-sleep -seconds 15
+          sleep 15
           echo "tailscale setup complete."
 
       - name: authenticating tailscale
         run: |
           echo "linking to tailscale network..."
-          & "c:\program files\tailscale\tailscale.exe" up --authkey=${{ secrets.TS_KEY }} --hostname=cloud-rdp-server --accept-routes
+          sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=cloud-mac-server --accept-routes
           echo "authentication successful."
 
-      - name: disabling password policy
+      - name: enabling remote management (VNC/ARD)
         run: |
-          echo "killing windows password complexity requirements..."
-          secedit /export /cfg config.inf
-          (get-content config.inf) -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' | set-content config.inf
-          secedit /configure /db $env:temp\temp.sdb /cfg config.inf /areas SECURITYPOLICY
-          echo "policy disabled."
+          echo "configuring remote access for macOS..."
+          
+          # Enable Screen Sharing (VNC)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
+          
+          # Set VNC password
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -setvncpw -vncpw "${{ github.event.inputs.password }}"
+          
+          # Enable Remote Login (SSH)
+          sudo systemsetup -setremotelogin on
+          
+          # Allow remote access for all users (or specify)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers
+          
+          # Open firewall ports for VNC (5900) and SSH (22)
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /System/Library/CoreServices/RemoteManagement/ARDAgent.app
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /System/Library/CoreServices/RemoteManagement/ARDAgent.app
+          
+          echo "remote access configured."
 
-      - name: configuring remote desktop
+      - name: disabling password policies
         run: |
-          echo "setting up user credentials..."
-          net user runneradmin "${{ github.event.inputs.password }}" /y
+          echo "configuring macOS password policies..."
+          # Disable automatic lock
+          sudo defaults write /Library/Preferences/com.apple.screensaver askForPassword -bool false
           
-          echo "configuring registry and firewall..."
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -value 1
+          # Disable password requirements for remote access
+          sudo pwpolicy -clearaccountpolicies
           
-          echo "rdp protocol enabled."
-          exit 0
+          # Set current user password
+          echo "runneradmin:${{ github.event.inputs.password }}" | sudo chpasswd
+          
+          echo "password configuration complete."
+
+      - name: configuring network settings
+        run: |
+          echo "optimizing network for remote access..."
+          
+          # Disable sleep
+          sudo pmset -a displaysleep 0
+          sudo pmset -a sleep 0
+          
+          # Disable power saving
+          sudo systemsetup -setcomputersleep Never
+          sudo systemsetup -setdisplaysleep Never
+          sudo systemsetup -setharddisksleep Never
+          
+          # Enable SSH keep-alive
+          echo "ClientAliveInterval 60" | sudo tee -a /etc/ssh/sshd_config
+          echo "ClientAliveCountMax 3" | sudo tee -a /etc/ssh/sshd_config
+          sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist
+          sudo launchctl load /System/Library/LaunchDaemons/ssh.plist
+          
+          echo "network optimization complete."
 
       - name: maintaining connection
         run: |
           echo "=========================================="
-          echo "server is live"
+          echo "server is live (macOS)"
           echo "username: runneradmin"
           echo "password: ${{ github.event.inputs.password }}"
-          echo "internal ip address:"
-          & "c:\program files\tailscale\tailscale.exe" ip -4
+          echo ""
+          echo "connection methods:"
+          echo "- SSH: ssh runneradmin@[tailscale-ip]"
+          echo "- VNC: vnc://[tailscale-ip] (use same password)"
+          echo ""
+          echo "tailscale internal ip address:"
+          /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4
           echo "=========================================="
-          while ($true) {
-            echo "keep-alive: $(get-date)"
-            start-sleep -seconds 300
-          }
+          while true; do
+            echo "keep-alive: $(date)"
+            sleep 300
+          done
