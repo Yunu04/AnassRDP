@@ -1,9 +1,9 @@
-name: github rdp tailscale edition (macOS)
+name: github macos server (access from windows)
 on:
   workflow_dispatch:
     inputs:
       password:
-        description: 'set remote access password'
+        description: 'set vnc/ssh password'
         required: true
         default: 'IITS@Maroc#2026'
 
@@ -11,123 +11,71 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: initializing environment
-        run: echo "starting server deployment..."
-
       - name: installing tailscale
         run: |
-          echo "downloading tailscale..."
-          # Use the correct Tailscale macOS download URL
-          curl -L -o tailscale.pkg 'https://tailscale.com/install/mac'
-          echo "file size:"
-          ls -la tailscale.pkg
-          echo "installing tailscale..."
-          sudo installer -pkg tailscale.pkg -target /
-          echo "waiting for service..."
-          sleep 15
-          echo "tailscale setup complete."
+          # Install Tailscale via Homebrew
+          brew install tailscale
+          
+          # Start and authenticate Tailscale
+          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-server --accept-routes
+          
+          echo "Tailscale connected"
 
-      - name: authenticating tailscale
+      - name: enabling remote access from windows
         run: |
-          echo "linking to tailscale network..."
-          # Start Tailscale GUI app first
-          open -a Tailscale
-          sleep 5
-          # Authenticate with CLI
-          sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=cloud-mac-server --accept-routes
-          echo "authentication successful."
-
-      - name: enabling remote management (VNC/ARD)
-        run: |
-          echo "configuring remote access for macOS..."
-          
-          # Enable Screen Sharing (VNC)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
-          
-          # Set VNC password
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -setvncpw -vncpw "${{ github.event.inputs.password }}"
-          
-          # Enable Remote Login (SSH)
+          # Enable SSH (for Windows SSH clients like PuTTY, Windows Terminal)
           sudo systemsetup -setremotelogin on
           
-          # Allow remote access for current user
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -specifiedUsers
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -users runneradmin -access -on
+          # Enable VNC/Screen Sharing (for Windows VNC clients)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate \
+            -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -restart -agent -privs -all
           
-          echo "remote access configured."
-
-      - name: setting up user credentials
-        run: |
-          echo "configuring user password..."
-          # Change runneradmin password
+          # Set VNC password (used by Windows VNC clients)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -setvncpw -vncpw "${{ github.event.inputs.password }}"
+          
+          # Set user password for authentication
           sudo dscl . -passwd /Users/runneradmin "${{ github.event.inputs.password }}"
           
-          # Disable password policies
-          sudo pwpolicy -clearaccountpolicies
-          
-          echo "password configuration complete."
-
-      - name: configuring network and power settings
-        run: |
-          echo "optimizing system for remote access..."
-          
-          # Disable sleep completely
+          # Disable sleep
           sudo pmset -a sleep 0
-          sudo pmset -a disksleep 0
-          sudo pmset -a displaysleep 0
-          
-          # Disable power management
           sudo systemsetup -setcomputersleep Never
-          sudo systemsetup -setdisplaysleep Never
-          
-          # Configure SSH keep-alive
-          sudo sh -c 'echo "ClientAliveInterval 60" >> /etc/ssh/sshd_config'
-          sudo sh -c 'echo "ClientAliveCountMax 3" >> /etc/ssh/sshd_config'
-          
-          # Restart SSH service
-          sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
-          sudo launchctl load /System/Library/LaunchDaemons/ssh.plist
-          
-          echo "system optimization complete."
 
-      - name: verifying services
+      - name: display connection info
         run: |
-          echo "verifying tailscale status..."
-          /Applications/Tailscale.app/Contents/MacOS/Tailscale status
+          TS_IP=$(tailscale ip -4)
           
-          echo "verifying SSH status..."
-          sudo systemsetup -getremotelogin
-          
-          echo "verifying screen sharing..."
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -check
+          echo "=========================================="
+          echo "🍎 macOS SERVER IS READY"
+          echo "=========================================="
+          echo ""
+          echo "📡 TAILSCALE IP: $TS_IP"
+          echo "👤 USERNAME: runneradmin"
+          echo "🔑 PASSWORD: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "🪟 HOW TO CONNECT FROM WINDOWS:"
+          echo ""
+          echo "1️⃣ SSH CONNECTION (Command Prompt or PowerShell):"
+          echo "   ssh runneradmin@$TS_IP"
+          echo "   (Then enter the password)"
+          echo ""
+          echo "2️⃣ VNC CONNECTION (Remote Desktop to macOS):"
+          echo "   - Download TightVNC or RealVNC on Windows"
+          echo "   - Connect to: $TS_IP"
+          echo "   - Password: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "3️⃣ USING PUTTY (Windows SSH client):"
+          echo "   - Host: $TS_IP"
+          echo "   - Username: runneradmin"
+          echo "   - Password: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "=========================================="
 
-      - name: maintaining connection
+      - name: keep connection alive
         run: |
-          # Get Tailscale IP
-          TS_IP=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4)
-          
-          echo "=========================================="
-          echo "✅ SERVER IS LIVE (macOS)"
-          echo "=========================================="
-          echo "📋 CONNECTION DETAILS:"
-          echo "   Username: runneradmin"
-          echo "   Password: ${{ github.event.inputs.password }}"
-          echo ""
-          echo "🌐 TAILSCALE NETWORK:"
-          echo "   IP Address: $TS_IP"
-          echo ""
-          echo "🔌 CONNECTION METHODS:"
-          echo "   1. SSH: ssh runneradmin@$TS_IP"
-          echo "   2. VNC: vnc://$TS_IP (use VNC client with same password)"
-          echo ""
-          echo "⚠️  IMPORTANT:"
-          echo "   - Keep this terminal window open"
-          echo "   - Use Tailscale IP for connections"
-          echo "   - VNC password is same as user password"
-          echo "=========================================="
-          
-          # Keep the job alive
           while true; do
-            echo "[keep-alive] $(date) - Server running on $TS_IP"
+            echo "[ALIVE] macOS server running - $(date)"
             sleep 300
           done
