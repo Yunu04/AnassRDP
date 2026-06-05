@@ -17,7 +17,10 @@ jobs:
       - name: installing tailscale
         run: |
           echo "downloading tailscale..."
-          curl -o tailscale.pkg 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.pkg'
+          # Use the correct Tailscale macOS download URL
+          curl -L -o tailscale.pkg 'https://tailscale.com/install/mac'
+          echo "file size:"
+          ls -la tailscale.pkg
           echo "installing tailscale..."
           sudo installer -pkg tailscale.pkg -target /
           echo "waiting for service..."
@@ -27,6 +30,10 @@ jobs:
       - name: authenticating tailscale
         run: |
           echo "linking to tailscale network..."
+          # Start Tailscale GUI app first
+          open -a Tailscale
+          sleep 5
+          # Authenticate with CLI
           sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=cloud-mac-server --accept-routes
           echo "authentication successful."
 
@@ -43,65 +50,84 @@ jobs:
           # Enable Remote Login (SSH)
           sudo systemsetup -setremotelogin on
           
-          # Allow remote access for all users (or specify)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers
-          
-          # Open firewall ports for VNC (5900) and SSH (22)
-          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /System/Library/CoreServices/RemoteManagement/ARDAgent.app
-          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /System/Library/CoreServices/RemoteManagement/ARDAgent.app
+          # Allow remote access for current user
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -specifiedUsers
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -users runneradmin -access -on
           
           echo "remote access configured."
 
-      - name: disabling password policies
+      - name: setting up user credentials
         run: |
-          echo "configuring macOS password policies..."
-          # Disable automatic lock
-          sudo defaults write /Library/Preferences/com.apple.screensaver askForPassword -bool false
+          echo "configuring user password..."
+          # Change runneradmin password
+          sudo dscl . -passwd /Users/runneradmin "${{ github.event.inputs.password }}"
           
-          # Disable password requirements for remote access
+          # Disable password policies
           sudo pwpolicy -clearaccountpolicies
-          
-          # Set current user password
-          echo "runneradmin:${{ github.event.inputs.password }}" | sudo chpasswd
           
           echo "password configuration complete."
 
-      - name: configuring network settings
+      - name: configuring network and power settings
         run: |
-          echo "optimizing network for remote access..."
+          echo "optimizing system for remote access..."
           
-          # Disable sleep
-          sudo pmset -a displaysleep 0
+          # Disable sleep completely
           sudo pmset -a sleep 0
+          sudo pmset -a disksleep 0
+          sudo pmset -a displaysleep 0
           
-          # Disable power saving
+          # Disable power management
           sudo systemsetup -setcomputersleep Never
           sudo systemsetup -setdisplaysleep Never
-          sudo systemsetup -setharddisksleep Never
           
-          # Enable SSH keep-alive
-          echo "ClientAliveInterval 60" | sudo tee -a /etc/ssh/sshd_config
-          echo "ClientAliveCountMax 3" | sudo tee -a /etc/ssh/sshd_config
-          sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist
+          # Configure SSH keep-alive
+          sudo sh -c 'echo "ClientAliveInterval 60" >> /etc/ssh/sshd_config'
+          sudo sh -c 'echo "ClientAliveCountMax 3" >> /etc/ssh/sshd_config'
+          
+          # Restart SSH service
+          sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
           sudo launchctl load /System/Library/LaunchDaemons/ssh.plist
           
-          echo "network optimization complete."
+          echo "system optimization complete."
+
+      - name: verifying services
+        run: |
+          echo "verifying tailscale status..."
+          /Applications/Tailscale.app/Contents/MacOS/Tailscale status
+          
+          echo "verifying SSH status..."
+          sudo systemsetup -getremotelogin
+          
+          echo "verifying screen sharing..."
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -check
 
       - name: maintaining connection
         run: |
+          # Get Tailscale IP
+          TS_IP=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4)
+          
           echo "=========================================="
-          echo "server is live (macOS)"
-          echo "username: runneradmin"
-          echo "password: ${{ github.event.inputs.password }}"
-          echo ""
-          echo "connection methods:"
-          echo "- SSH: ssh runneradmin@[tailscale-ip]"
-          echo "- VNC: vnc://[tailscale-ip] (use same password)"
-          echo ""
-          echo "tailscale internal ip address:"
-          /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4
+          echo "✅ SERVER IS LIVE (macOS)"
           echo "=========================================="
+          echo "📋 CONNECTION DETAILS:"
+          echo "   Username: runneradmin"
+          echo "   Password: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "🌐 TAILSCALE NETWORK:"
+          echo "   IP Address: $TS_IP"
+          echo ""
+          echo "🔌 CONNECTION METHODS:"
+          echo "   1. SSH: ssh runneradmin@$TS_IP"
+          echo "   2. VNC: vnc://$TS_IP (use VNC client with same password)"
+          echo ""
+          echo "⚠️  IMPORTANT:"
+          echo "   - Keep this terminal window open"
+          echo "   - Use Tailscale IP for connections"
+          echo "   - VNC password is same as user password"
+          echo "=========================================="
+          
+          # Keep the job alive
           while true; do
-            echo "keep-alive: $(date)"
+            echo "[keep-alive] $(date) - Server running on $TS_IP"
             sleep 300
           done
