@@ -1,9 +1,9 @@
-name: macOS Server - Access from Windows
+name: macOS Server - Homebrew Method
 on:
   workflow_dispatch:
     inputs:
       password:
-        description: 'VNC/SSH Password'
+        description: 'Password for VNC/SSH access'
         required: true
         default: 'IITS@Maroc#2026'
 
@@ -13,174 +13,51 @@ jobs:
     steps:
       - name: Install Tailscale
         run: |
-          echo "📥 Downloading Tailscale..."
-          curl -L -o tailscale.pkg 'https://pkgs.tailscale.com/stable/Tailscale-latest.pkg'
+          # Install using Homebrew
+          brew install tailscale
           
-          echo "📦 Installing Tailscale..."
-          sudo installer -pkg tailscale.pkg -target /
+          # Start the Tailscale service
+          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-server --accept-routes
           
-          echo "🚀 Starting Tailscale..."
-          sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale up \
-            --authkey=${{ secrets.TS_KEY }} \
-            --hostname=macos-server \
-            --accept-routes \
-            --ssh
-          
-          echo "✅ Tailscale installed and connected"
+          # Show status
+          sudo tailscale status
 
-      - name: Configure Remote Access
+      - name: Setup Remote Desktop
         run: |
-          echo "🔧 Configuring remote access..."
-          
           # Enable SSH
           sudo systemsetup -setremotelogin on
           
-          # Enable VNC/Screen Sharing with password
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate \
-            -configure -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -restart -agent -privs -all
+          # Enable Screen Sharing (VNC)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
           
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -setvncpw -vncpw "${{ github.event.inputs.password }}"
+          # Set VNC password
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -setvncpw -vncpw "${{ github.event.inputs.password }}"
           
           # Set user password
           sudo dscl . -passwd /Users/runneradmin "${{ github.event.inputs.password }}"
           
-          # Disable sleep and power saving
+          # Disable sleep
           sudo pmset -a sleep 0
-          sudo pmset -a disksleep 0
-          sudo pmset -a displaysleep 0
-          sudo systemsetup -setcomputersleep Never
-          sudo systemsetup -setdisplaysleep Never
-          
-          # Configure firewall to allow remote connections
-          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
-          
-          echo "✅ Remote access configured"
 
-      - name: Install Additional Tools (Optional)
+      - name: Get Connection Details
         run: |
-          echo "🔧 Installing useful tools..."
+          IP=$(sudo tailscale ip -4)
           
-          # Install homebrew if not present
-          if ! command -v brew &> /dev/null; then
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          fi
-          
-          # Install useful packages
-          brew install htop
-          brew install git
-          brew install wget
-          
-          echo "✅ Additional tools installed"
+          echo "========================================="
+          echo "🍎 MACOS SERVER ACTIVE"
+          echo "========================================="
+          echo "IP Address: $IP"
+          echo "Username: runneradmin"
+          echo "Password: ${{ github.event.inputs.password }}"
+          echo "========================================="
+          echo "SSH: ssh runneradmin@$IP"
+          echo "VNC: vnc://$IP (use TightVNC on Windows)"
+          echo "========================================="
 
-      - name: Create Connection Script
+      - name: Keep Running
         run: |
-          TS_IP=$(sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4)
-          
-          cat << 'EOF' > ~/connection_info.txt
-          ==========================================
-          🍎 macOS SERVER - CONNECTION INFORMATION
-          ==========================================
-          
-          📡 TAILSCALE IP: $TS_IP
-          👤 USERNAME: runneradmin
-          🔑 PASSWORD: ${{ github.event.inputs.password }}
-          
-          ==========================================
-          🪟 HOW TO CONNECT FROM WINDOWS
-          ==========================================
-          
-          1️⃣ INSTALL TAILSCALE ON WINDOWS:
-             - Download from: https://tailscale.com/download/windows
-             - Install and login with same account
-          
-          2️⃣ SSH CONNECTION (Command Line):
-             Open PowerShell or CMD and run:
-             ssh runneradmin@$TS_IP
-             
-             Or with PuTTY:
-             Host: $TS_IP
-             Username: runneradmin
-             Password: ${{ github.event.inputs.password }}
-          
-          3️⃣ VNC CONNECTION (Full Desktop):
-             - Download TightVNC: https://www.tightvnc.com/download.php
-             - Connect to: $TS_IP
-             - Password: ${{ github.event.inputs.password }}
-          
-          4️⃣ FILE TRANSFER (SCP):
-             scp file.txt runneradmin@$TS_IP:~/
-          
-          ==========================================
-          ✅ SERVER WILL REMAIN ACTIVE FOR THIS SESSION
-          ==========================================
-          EOF
-          
-          cat ~/connection_info.txt
-
-      - name: Create Windows Batch Script
-        run: |
-          TS_IP=$(sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4)
-          
-          cat << EOF > ~/connect_to_mac.bat
-          @echo off
-          echo ==========================================
-          echo Connecting to macOS Server
-          echo ==========================================
-          echo.
-          echo IP Address: $TS_IP
-          echo Username: runneradmin
-          echo.
-          echo Choose connection method:
-          echo 1. SSH Connection
-          echo 2. VNC Connection
-          echo.
-          set /p choice="Enter choice (1 or 2): "
-          
-          if "%choice%"=="1" (
-              echo Starting SSH connection...
-              ssh runneradmin@$TS_IP
-          ) else if "%choice%"=="2" (
-              echo Starting VNC connection...
-              start vnc://$TS_IP
-          ) else (
-              echo Invalid choice
-          )
-          EOF
-          
-          echo "✅ Windows batch script created"
-
-      - name: Keep Server Alive
-        run: |
-          TS_IP=$(sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4)
-          
-          echo ""
-          echo "=========================================="
-          echo "🎉 SERVER IS RUNNING!"
-          echo "=========================================="
-          echo ""
-          echo "📊 CONNECTION DETAILS:"
-          echo "   IP: $TS_IP"
-          echo "   User: runneradmin"
-          echo "   Pass: ${{ github.event.inputs.password }}"
-          echo ""
-          echo "💡 QUICK CONNECT:"
-          echo "   ssh runneradmin@$TS_IP"
-          echo ""
-          echo "🕐 Server will stay alive until workflow is cancelled"
-          echo "=========================================="
-          echo ""
-          
-          # Keep the workflow running
+          echo "Server will stay active until cancelled"
           while true; do
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ Server alive - IP: $TS_IP - Connections: $(whoami | wc -l)"
-            
-            # Check Tailscale status every minute
-            STATUS=$(sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale status 2>/dev/null | head -1)
-            echo "   Tailscale: $STATUS"
-            
-            sleep 60
+            echo "✅ Server alive - $(date)"
+            sleep 300
           done
