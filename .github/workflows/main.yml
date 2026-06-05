@@ -1,9 +1,9 @@
-name: macOS Server - Working
+name: macOS Server - FINAL WORKING
 on:
   workflow_dispatch:
     inputs:
       password:
-        description: 'VNC/SSH Password'
+        description: 'VNC Password'
         required: true
         default: 'IITS@Maroc#2026'
 
@@ -11,16 +11,12 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Install Tailscale
+      - name: Install and Setup Tailscale
         run: |
           brew install tailscale
-          sudo pkill tailscaled || true
-          sudo /opt/homebrew/opt/tailscale/bin/tailscaled --state=/tmp/ts.state &
-          sleep 5
-          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-server --accept-routes
-          sudo tailscale status
-
-      - name: Setup Remote Access
+          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-server
+          
+      - name: Enable Remote Access
         run: |
           # Enable SSH
           sudo systemsetup -setremotelogin on
@@ -31,51 +27,23 @@ jobs:
           
           # Disable sleep
           sudo pmset -a sleep 0
-          sudo pmset -a displaysleep 0
           
-          echo "✅ Remote access configured"
-
-      - name: Set User Password (Alternative Method)
+      - name: Display Connection Info
         run: |
-          # Try different password setting methods
-          
-          # Method 1: Using sysadminctl (works on newer macOS)
-          sudo sysadminctl -adminUser runneradmin -adminPassword "" -resetPasswordForUser runneradmin -newPassword "${{ github.event.inputs.password }}" || true
-          
-          # Method 2: Using expect (more reliable)
-          brew install expect
-          
-          expect << EOF
-          spawn sudo passwd runneradmin
-          expect "New password:"
-          send "${{ github.event.inputs.password }}\r"
-          expect "Retype new password:"
-          send "${{ github.event.inputs.password }}\r"
-          expect eof
-          EOF
-          
-          echo "✅ Password set"
-
-      - name: Get Connection Info
-        run: |
-          sleep 5
-          TS_IP=$(sudo tailscale ip -4)
-          
-          echo ""
+          IP=$(tailscale ip -4)
           echo "=========================================="
-          echo "🍎 macOS SERVER READY"
+          echo "✅ MACOS SERVER IS READY"
           echo "=========================================="
-          echo "IP Address: $TS_IP"
+          echo "IP Address: $IP"
           echo "Username: runneradmin"
-          echo "Password: ${{ github.event.inputs.password }}"
+          echo "VNC Password: ${{ github.event.inputs.password }}"
           echo ""
-          echo "SSH: ssh runneradmin@$TS_IP"
-          echo "VNC: vnc://$TS_IP (Password: ${{ github.event.inputs.password }})"
+          echo "🔌 TO CONNECT FROM WINDOWS:"
+          echo "1. Install Tailscale on Windows"
+          echo "2. SSH: ssh runneradmin@$IP"
+          echo "3. VNC: Download TightVNC, connect to $IP"
+          echo "   Password: ${{ github.event.inputs.password }}"
           echo "=========================================="
-
+          
       - name: Keep Alive
-        run: |
-          while true; do
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Server Running"
-            sleep 60
-          done
+        run: while true; do sleep 300; done
