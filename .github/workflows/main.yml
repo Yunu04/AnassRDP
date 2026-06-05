@@ -1,4 +1,4 @@
-name: macOS Server - Working Windows Access
+name: macOS Server - Working
 on:
   workflow_dispatch:
     inputs:
@@ -13,119 +13,69 @@ jobs:
     steps:
       - name: Install Tailscale
         run: |
-          # Install using Homebrew
           brew install tailscale
-          
-          # Kill existing tailscaled if running
           sudo pkill tailscaled || true
-          
-          # Start tailscaled fresh
-          sudo /opt/homebrew/opt/tailscale/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state &
-          
-          # Wait for tailscaled to start
+          sudo /opt/homebrew/opt/tailscale/bin/tailscaled --state=/tmp/ts.state &
           sleep 5
-          
-          # Now connect to Tailscale
-          sudo /opt/homebrew/bin/tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-server --accept-routes
-          
-          # Show status
-          sudo /opt/homebrew/bin/tailscale status
+          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-server --accept-routes
+          sudo tailscale status
 
-      - name: Setup Remote Desktop Access
+      - name: Setup Remote Access
         run: |
           # Enable SSH
           sudo systemsetup -setremotelogin on
           
-          # Kill existing ARD Agent
-          sudo pkill ARDAgent || true
-          
-          # Enable Screen Sharing (VNC) with password
+          # Enable VNC
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
-          
-          # Set VNC password
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -setvncpw -vncpw "${{ github.event.inputs.password }}"
           
-          # Set user password - FIXED METHOD
-          sudo dscl /Local/Default -passwd /Users/runneradmin "${{ github.event.inputs.password }}"
-          
-          # Disable sleep and power saving
+          # Disable sleep
           sudo pmset -a sleep 0
-          sudo pmset -a disksleep 0
           sudo pmset -a displaysleep 0
-          sudo systemsetup -setcomputersleep Never
           
           echo "✅ Remote access configured"
 
-      - name: Verify Services
+      - name: Set User Password (Alternative Method)
         run: |
-          echo "Checking Tailscale status..."
-          sudo /opt/homebrew/bin/tailscale status
+          # Try different password setting methods
           
-          echo ""
-          echo "Checking SSH status..."
-          sudo systemsetup -getremotelogin
+          # Method 1: Using sysadminctl (works on newer macOS)
+          sudo sysadminctl -adminUser runneradmin -adminPassword "" -resetPasswordForUser runneradmin -newPassword "${{ github.event.inputs.password }}" || true
           
-          echo ""
-          echo "Getting Tailscale IP..."
-          TS_IP=$(sudo /opt/homebrew/bin/tailscale ip -4)
-          echo "IP Address: $TS_IP"
+          # Method 2: Using expect (more reliable)
+          brew install expect
           
-          echo ""
-          echo "Testing SSH connection..."
-          ssh -o ConnectTimeout=5 runneradmin@localhost echo "SSH works" || echo "SSH test failed"
-
-      - name: Get Connection Information
-        run: |
-          # Get Tailscale IP
-          TS_IP=$(sudo /opt/homebrew/bin/tailscale ip -4)
-          
-          echo ""
-          echo "=========================================="
-          echo "🍎 macOS SERVER IS READY"
-          echo "=========================================="
-          echo ""
-          echo "📡 TAILSCALE IP: $TS_IP"
-          echo "👤 USERNAME: runneradmin"
-          echo "🔑 PASSWORD: ${{ github.event.inputs.password }}"
-          echo ""
-          echo "=========================================="
-          echo "🪟 CONNECT FROM WINDOWS"
-          echo "=========================================="
-          echo ""
-          echo "1️⃣ Install Tailscale on Windows:"
-          echo "   https://tailscale.com/download/windows"
-          echo ""
-          echo "2️⃣ SSH Connection (PowerShell or CMD):"
-          echo "   ssh runneradmin@$TS_IP"
-          echo "   Password: ${{ github.event.inputs.password }}"
-          echo ""
-          echo "3️⃣ VNC Connection (Full Desktop):"
-          echo "   Download TightVNC: https://www.tightvnc.com/download.php"
-          echo "   Server: $TS_IP"
-          echo "   Password: ${{ github.event.inputs.password }}"
-          echo ""
-          echo "=========================================="
-          
-          # Save to file
-          cat > ~/connection_info.txt << EOF
-          macOS Server Connection Info
-          =============================
-          IP: $TS_IP
-          User: runneradmin
-          Pass: ${{ github.event.inputs.password }}
-          SSH: ssh runneradmin@$TS_IP
-          VNC: vnc://$TS_IP
+          expect << EOF
+          spawn sudo passwd runneradmin
+          expect "New password:"
+          send "${{ github.event.inputs.password }}\r"
+          expect "Retype new password:"
+          send "${{ github.event.inputs.password }}\r"
+          expect eof
           EOF
-
-      - name: Keep Server Alive
-        run: |
-          echo "🟢 Server is running. Keep this workflow running to maintain access."
-          echo ""
-          echo "Press Ctrl+C to stop the server"
-          echo ""
           
+          echo "✅ Password set"
+
+      - name: Get Connection Info
+        run: |
+          sleep 5
+          TS_IP=$(sudo tailscale ip -4)
+          
+          echo ""
+          echo "=========================================="
+          echo "🍎 macOS SERVER READY"
+          echo "=========================================="
+          echo "IP Address: $TS_IP"
+          echo "Username: runneradmin"
+          echo "Password: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "SSH: ssh runneradmin@$TS_IP"
+          echo "VNC: vnc://$TS_IP (Password: ${{ github.event.inputs.password }})"
+          echo "=========================================="
+
+      - name: Keep Alive
+        run: |
           while true; do
-            TS_IP=$(sudo /opt/homebrew/bin/tailscale ip -4 2>/dev/null || echo "waiting...")
-            echo "[$(date '+%H:%M:%S')] 🟢 Server alive - IP: $TS_IP"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Server Running"
             sleep 60
           done
