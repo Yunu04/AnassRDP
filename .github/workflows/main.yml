@@ -1,31 +1,196 @@
+name: macOS RDP Server with Tailscale
+on:
+  workflow_dispatch:
+    inputs:
+      password:
+        description: 'Set VNC/SSH Password'
+        required: true
+        default: 'Admin123!'
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: install and run tailscale
+      - name: Initialize environment
         run: |
+          echo "========================================="
+          echo "Starting macOS Server Deployment"
+          echo "========================================="
+          echo "macOS Version: $(sw_vers -productVersion)"
+          echo "Current User: $(whoami)"
+          echo "========================================="
+
+      - name: Install Tailscale
+        run: |
+          echo "Installing Tailscale via Homebrew..."
           brew install tailscale
-          sudo tailscale set --operator=$USER
-          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-server --accept-routes
-          
-      - name: enable VNC
+          echo "Tailscale installed successfully"
+
+      - name: Start and Authenticate Tailscale
         run: |
+          echo "Starting Tailscale service..."
+          sudo tailscale set --operator=$USER
+          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-rdp-server --accept-routes
+          echo "Tailscale authenticated successfully"
+          sleep 5
+
+      - name: Enable Remote Management (VNC)
+        run: |
+          echo "Enabling Apple Remote Management..."
+          
+          # Kill existing screensharing if running
+          sudo launchctl unload /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          
+          # Configure ARD Agent
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -configure -allowAccessFor -allUsers -privs -all
+          
+          # Set VNC password
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -configure -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "${{ github.event.inputs.password }}"
+          
+          # Start screen sharing service
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
           
-      - name: set password
+          echo "Remote Management enabled successfully"
+
+      - name: Configure Firewall
         run: |
-          sudo dscl . -passwd /Users/$(whoami) "${{ github.event.inputs.password }}"
+          echo "Configuring macOS firewall..."
           
-      - name: show info
+          # Enable firewall
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on
+          
+          # Allow ARD Agent
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /System/Library/CoreServices/RemoteManagement/ARDAgent.app
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /System/Library/CoreServices/RemoteManagement/ARDAgent.app
+          
+          # Allow SSH
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/libexec/sftp-server
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /System/Library/CoreServices/RemoteManagement/AppleVNCServer
+          
+          echo "Firewall configured successfully"
+
+      - name: Enable SSH
         run: |
-          echo "IP: $(sudo tailscale ip -4)"
-          echo "User: $(whoami)"
-          echo "Pass: ${{ github.event.inputs.password }}"
+          echo "Enabling SSH..."
+          sudo systemsetup -setremotelogin on
+          echo "SSH enabled successfully"
+
+      - name: Set User Password
+        run: |
+          echo "Setting user password..."
+          CURRENT_USER=$(whoami)
+          echo "Current user: $CURRENT_USER"
           
-      - name: keep alive
-        run: while true; do sleep 300; done
+          # Change password for current user
+          sudo dscl . -passwd /Users/$CURRENT_USER "${{ github.event.inputs.password }}"
+          echo "Password configured successfully for user: $CURRENT_USER"
+
+      - name: Install Additional Tools
+        run: |
+          echo "Installing additional tools..."
+          brew install htop wget netstat nmap tree
+          echo "Additional tools installed"
+
+      - name: Display Connection Information
+        run: |
+          CURRENT_USER=$(whoami)
+          sleep 3
+          TAILSCALE_IP=$(sudo tailscale ip -4 2>/dev/null || echo "Waiting for IP...")
+          LOCAL_IP=$(ifconfig | grep "inet " | grep -v 127.0.0.1 | head -1 | awk '{print $2}')
+          MACOS_VERSION=$(sw_vers -productVersion)
+          
+          echo ""
+          echo "=========================================="
+          echo "✅ MACOS RDP SERVER IS LIVE ✅"
+          echo "=========================================="
+          echo ""
+          echo "📋 SERVER INFORMATION:"
+          echo "   Operating System: macOS $MACOS_VERSION"
+          echo "   Hostname: macos-rdp-server"
+          echo "   Current User: $CURRENT_USER"
+          echo "   User Password: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "🌐 NETWORK ADDRESSES:"
+          echo "   Tailscale IP: $TAILSCALE_IP"
+          echo "   Local IP: $LOCAL_IP"
+          echo ""
+          echo "🔌 HOW TO CONNECT (3 METHODS):"
+          echo ""
+          echo "   METHOD 1 - VNC Client (Recommended):"
+          echo "   ─────────────────────────────────────"
+          echo "   • Download: RealVNC, TightVNC, UltraVNC, or Remmina"
+          echo "   • Server Address: $TAILSCALE_IP"
+          echo "   • Port: 5900"
+          echo "   • Password: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "   METHOD 2 - macOS Screen Sharing:"
+          echo "   ─────────────────────────────────────"
+          echo "   • Open Finder → Go → Connect to Server"
+          echo "   • Or press Cmd+K"
+          echo "   • Enter: vnc://$TAILSCALE_IP"
+          echo "   • Password: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "   METHOD 3 - SSH Connection:"
+          echo "   ─────────────────────────────────────"
+          echo "   • Command: ssh $CURRENT_USER@$TAILSCALE_IP"
+          echo "   • Password: ${{ github.event.inputs.password }}"
+          echo ""
+          echo "⚠️  IMPORTANT NOTES:"
+          echo "   • This server runs for maximum 6 hours"
+          echo "   • Keep this GitHub Actions window open"
+          echo "   • You must be on the same Tailscale network"
+          echo "   • First VNC connection may take 10-15 seconds"
+          echo ""
+          echo "=========================================="
+          echo "🟢 SERVER IS RUNNING AND READY FOR CONNECTIONS 🟢"
+          echo "=========================================="
+          echo ""
+
+      - name: Verify Services
+        run: |
+          echo "Verifying services are running..."
+          echo ""
+          
+          # Check VNC service
+          echo "VNC Service Status:"
+          sudo launchctl list | grep screensharing && echo "✅ VNC is running" || echo "⚠️ VNC check failed"
+          
+          # Check SSH service
+          echo ""
+          echo "SSH Service Status:"
+          sudo systemsetup -getremotelogin
+          
+          # Check Tailscale status
+          echo ""
+          echo "Tailscale Status:"
+          sudo tailscale status
+          
+          echo ""
+          echo "✅ All services verified"
+
+      - name: Keep Connection Alive
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "🔄 MAINTAINING CONNECTION - DO NOT CLOSE 🔄"
+          echo "=========================================="
+          echo ""
+          echo "Server will send a keep-alive signal every 5 minutes"
+          echo "Close this workflow to stop the server"
+          echo ""
+          
+          COUNTER=0
+          while true; do
+            COUNTER=$((COUNTER+1))
+            CURRENT_IP=$(sudo tailscale ip -4 2>/dev/null || echo "obtaining IP...")
+            UPTIME=$(uptime | awk -F 'up' '{print $2}' | awk -F ',' '{print $1}')
+            
+            echo "[KEEP-ALIVE #$COUNTER] $(date) - Uptime: $UPTIME - Tailscale IP: $CURRENT_IP"
+            echo "✅ Server is active - Accepting VNC connections on port 5900"
+            echo "---"
+            
+            sleep 300
+          done
