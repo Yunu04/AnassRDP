@@ -16,14 +16,11 @@ jobs:
           # Install using Homebrew
           brew install tailscale
           
-          # Start the Tailscale service properly
-          sudo brew services start tailscale
+          # Kill existing tailscaled if running
+          sudo pkill tailscaled || true
           
-          # Wait for service to initialize
-          sleep 5
-          
-          # Start tailscaled in background (bypass service issue)
-          sudo /opt/homebrew/opt/tailscale/bin/tailscaled --state=/tmp/tailscale.state &
+          # Start tailscaled fresh
+          sudo /opt/homebrew/opt/tailscale/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state &
           
           # Wait for tailscaled to start
           sleep 5
@@ -39,14 +36,17 @@ jobs:
           # Enable SSH
           sudo systemsetup -setremotelogin on
           
+          # Kill existing ARD Agent
+          sudo pkill ARDAgent || true
+          
           # Enable Screen Sharing (VNC) with password
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
           
           # Set VNC password
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -setvncpw -vncpw "${{ github.event.inputs.password }}"
           
-          # Set user password
-          sudo dscl . -passwd /Users/runneradmin "${{ github.event.inputs.password }}"
+          # Set user password - FIXED METHOD
+          sudo dscl /Local/Default -passwd /Users/runneradmin "${{ github.event.inputs.password }}"
           
           # Disable sleep and power saving
           sudo pmset -a sleep 0
@@ -56,11 +56,26 @@ jobs:
           
           echo "✅ Remote access configured"
 
+      - name: Verify Services
+        run: |
+          echo "Checking Tailscale status..."
+          sudo /opt/homebrew/bin/tailscale status
+          
+          echo ""
+          echo "Checking SSH status..."
+          sudo systemsetup -getremotelogin
+          
+          echo ""
+          echo "Getting Tailscale IP..."
+          TS_IP=$(sudo /opt/homebrew/bin/tailscale ip -4)
+          echo "IP Address: $TS_IP"
+          
+          echo ""
+          echo "Testing SSH connection..."
+          ssh -o ConnectTimeout=5 runneradmin@localhost echo "SSH works" || echo "SSH test failed"
+
       - name: Get Connection Information
         run: |
-          # Wait for Tailscale to get IP
-          sleep 10
-          
           # Get Tailscale IP
           TS_IP=$(sudo /opt/homebrew/bin/tailscale ip -4)
           
@@ -90,12 +105,27 @@ jobs:
           echo "   Password: ${{ github.event.inputs.password }}"
           echo ""
           echo "=========================================="
+          
+          # Save to file
+          cat > ~/connection_info.txt << EOF
+          macOS Server Connection Info
+          =============================
+          IP: $TS_IP
+          User: runneradmin
+          Pass: ${{ github.event.inputs.password }}
+          SSH: ssh runneradmin@$TS_IP
+          VNC: vnc://$TS_IP
+          EOF
 
       - name: Keep Server Alive
         run: |
           echo "🟢 Server is running. Keep this workflow running to maintain access."
           echo ""
+          echo "Press Ctrl+C to stop the server"
+          echo ""
+          
           while true; do
-            echo "[$(date '+%H:%M:%S')] 🟢 Server alive - IP: $(sudo /opt/homebrew/bin/tailscale ip -4 2>/dev/null || echo 'waiting...')"
+            TS_IP=$(sudo /opt/homebrew/bin/tailscale ip -4 2>/dev/null || echo "waiting...")
+            echo "[$(date '+%H:%M:%S')] 🟢 Server alive - IP: $TS_IP"
             sleep 60
           done
