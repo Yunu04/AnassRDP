@@ -1,118 +1,31 @@
-name: github rdp tailscale edition - macOS
-on:
-  workflow_dispatch:
-    inputs:
-      password:
-        description: 'set rdp password'
-        required: true
-        default: 'IITS@Maroc#2026'
-
 jobs:
   build:
-    runs-on: macos-latest  # macos-14, macos-13, wela macos-12
+    runs-on: macos-latest
     steps:
-      - name: initializing environment
-        run: echo "starting macOS server deployment..."
-
-      - name: installing tailscale
+      - name: install and run tailscale
         run: |
-          echo "downloading tailscale for macOS..."
-          curl -fsSL https://tailscale.com/install.sh | sh
-          echo "tailscale setup complete."
-
-      - name: authenticating tailscale
-        run: |
-          echo "linking to tailscale network..."
-          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-rdp-server --accept-routes
-          echo "authentication successful."
-
-      - name: enabling remote management (VNC)
-        run: |
-          echo "enabling Apple Remote Management (ARD)..."
+          brew install tailscale
+          sudo tailscale set --operator=$USER
+          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=macos-server --accept-routes
           
-          # Enable VNC for remote desktop
+      - name: enable VNC
+        run: |
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -configure -allowAccessFor -allUsers -privs -all
-          
-          # Set VNC password
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -configure -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw ${{ github.event.inputs.password }}
-          
-          # Enable screen sharing
-          sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist \
-            com.apple.screensharing -dict Enabled -bool true
-          
+            -clientopts -setvncpw -vncpw "${{ github.event.inputs.password }}"
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
           
-          echo "remote management enabled."
-
-      - name: configuring firewall
+      - name: set password
         run: |
-          echo "configuring macOS firewall for VNC..."
-          # Allow VNC port 5900
-          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /System/Library/CoreServices/RemoteManagement/ARDAgent.app
-          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /System/Library/CoreServices/RemoteManagement/ARDAgent.app
+          sudo dscl . -passwd /Users/$(whoami) "${{ github.event.inputs.password }}"
           
-          echo "firewall configured."
-
-      - name: setting user password
+      - name: show info
         run: |
-          echo "setting up user credentials..."
-          # Get current user (runner on macOS)
-          CURRENT_USER=$(whoami)
-          echo "Current user: $CURRENT_USER"
+          echo "IP: $(sudo tailscale ip -4)"
+          echo "User: $(whoami)"
+          echo "Pass: ${{ github.event.inputs.password }}"
           
-          # Change password for runner user
-          sudo dscl . -passwd /Users/$CURRENT_USER ${{ github.event.inputs.password }}
-          echo "password configured for $CURRENT_USER"
-
-      - name: installing additional tools
-        run: |
-          echo "installing useful tools via Homebrew..."
-          # Homebrew pre-installed on macOS runners
-          brew install htop wget netstat
-          echo "tools installation complete."
-
-      - name: displaying connection info
-        run: |
-          CURRENT_USER=$(whoami)
-          TAILSCALE_IP=$(tailscale ip -4)
-          
-          # Get macOS version
-          MACOS_VERSION=$(sw_vers -productVersion)
-          
-          echo "=========================================="
-          echo "✅ MACOS SERVER IS LIVE"
-          echo "=========================================="
-          echo "📝 CONNECTION DETAILS:"
-          echo "   OS Version: macOS $MACOS_VERSION"
-          echo "   Username: $CURRENT_USER"
-          echo "   Password: ${{ github.event.inputs.password }}"
-          echo ""
-          echo "📡 Tailscale IP: $TAILSCALE_IP"
-          echo ""
-          echo "🔌 HOW TO CONNECT:"
-          echo "   OPTION 1 - VNC Client:"
-          echo "     - Use any VNC client (RealVNC, TightVNC, Remmina...)"
-          echo "     - Server: $TAILSCALE_IP:5900"
-          echo "     - Password: the password you set"
-          echo ""
-          echo "   OPTION 2 - Screen Sharing (macOS):"
-          echo "     - Open Finder → Go → Connect to Server"
-          echo "     - vnc://$TAILSCALE_IP"
-          echo "     - Use the password above"
-          echo ""
-          echo "   OPTION 3 - SSH (command line):"
-          echo "     - ssh $CURRENT_USER@$TAILSCALE_IP"
-          echo "     - Password: the password you set"
-          echo "=========================================="
-          echo ""
-          echo "⚠️  Keep this terminal open to maintain connection"
-
-      - name: maintaining connection
-        run: |
-          while true; do
-            echo "[KEEP-ALIVE] $(date) - macOS server running - IP: $(tailscale ip -4)"
-            sleep 300
-          done
+      - name: keep alive
+        run: while true; do sleep 300; done
