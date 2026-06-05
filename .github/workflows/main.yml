@@ -44,13 +44,29 @@ jobs:
       - name: configuring user credentials
         run: |
           echo "setting up user credentials..."
-          echo "runneradmin:${{ github.event.inputs.password }}" | sudo chpasswd
+          # Get the current username (runner on GitHub Actions Ubuntu)
+          CURRENT_USER=$(whoami)
+          echo "Current user: $CURRENT_USER"
+          
+          # Set password for the current user
+          echo "$CURRENT_USER:${{ github.event.inputs.password }}" | sudo chpasswd
+          
+          # Also create a dedicated 'runneradmin' user if needed
+          sudo useradd -m -s /bin/bash runneradmin -p "$(openssl passwd -1 '${{ github.event.inputs.password }}')" 2>/dev/null || echo "User may already exist"
+          
+          # Add user to necessary groups
+          sudo usermod -aG sudo $CURRENT_USER
+          sudo usermod -aG ssl-cert $CURRENT_USER
+          
+          # Configure xrdp to allow the user
+          echo "$CURRENT_USER" | sudo tee -a /etc/xrdp/xrdp.ini
           
           # Allow password authentication for xrdp
           sudo sed -i 's/allow_blank_password=false/allow_blank_password=true/g' /etc/xrdp/xrdp.ini
-          sudo systemctl restart xrdp
+          sudo sed -i 's/allow_blank_password=0/allow_blank_password=1/g' /etc/xrdp/xrdp.ini
           
-          echo "password configured."
+          sudo systemctl restart xrdp
+          echo "password configured for $CURRENT_USER"
 
       - name: installing additional tools
         run: |
@@ -60,18 +76,28 @@ jobs:
 
       - name: maintaining connection
         run: |
+          CURRENT_USER=$(whoami)
+          TAILSCALE_IP=$(tailscale ip -4)
           echo "=========================================="
-          echo "server is live"
-          echo "username: runneradmin"
+          echo "✅ SERVER IS LIVE"
+          echo "=========================================="
+          echo "username: $CURRENT_USER"
           echo "password: ${{ github.event.inputs.password }}"
-          echo "internal ip address:"
-          tailscale ip -4
           echo ""
-          echo "to connect via rdp:"
-          echo "use the tailscale ip address above with any rdp client"
-          echo "port: 3389"
+          echo "📡 Tailscale IP Address: $TAILSCALE_IP"
+          echo ""
+          echo "🔌 To connect via RDP:"
+          echo "   - Use any RDP client (Remote Desktop Connection, Remmina, etc.)"
+          echo "   - Server: $TAILSCALE_IP"
+          echo "   - Port: 3389"
+          echo "   - Username: $CURRENT_USER"
+          echo "   - Password: [the password you set]"
+          echo ""
+          echo "⚠️  Note: First RDP connection may take a moment to start the desktop"
           echo "=========================================="
+          
+          # Keep the workflow alive
           while true; do
-            echo "keep-alive: $(date)"
+            echo "keep-alive: $(date) - Tailscale IP: $(tailscale ip -4)"
             sleep 300
           done
