@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: initializing environment
         run: echo "starting server deployment..."
@@ -17,38 +17,46 @@ jobs:
       - name: installing tailscale
         run: |
           echo "downloading tailscale..."
-          invoke-webrequest -uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe' -outfile 'tailscale.exe'
-          start-process -filepath "tailscale.exe" -argumentlist "/quiet" -wait
-          echo "waiting for service..."
-          start-sleep -seconds 15
+          curl -fsSL https://tailscale.com/install.sh | sh
           echo "tailscale setup complete."
 
       - name: authenticating tailscale
         run: |
           echo "linking to tailscale network..."
-          & "c:\program files\tailscale\tailscale.exe" up --authkey=${{ secrets.TS_KEY }} --hostname=cloud-rdp-server --accept-routes
+          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=cloud-ubuntu-server --accept-routes
           echo "authentication successful."
 
-      - name: disabling password policy
+      - name: setting up remote desktop (xrdp)
         run: |
-          echo "killing windows password complexity requirements..."
-          secedit /export /cfg config.inf
-          (get-content config.inf) -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' | set-content config.inf
-          secedit /configure /db $env:temp\temp.sdb /cfg config.inf /areas SECURITYPOLICY
-          echo "policy disabled."
+          echo "installing xrdp and xfce4 desktop environment..."
+          sudo apt-get update
+          sudo apt-get install -y xrdp xfce4 xfce4-goodies
+          
+          echo "configuring xrdp to use xfce4..."
+          echo "xfce4-session" > ~/.xsession
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+          
+          echo "configuring firewall for rdp..."
+          sudo ufw allow 3389/tcp
+          echo "xrdp setup complete."
 
-      - name: configuring remote desktop
+      - name: configuring user credentials
         run: |
           echo "setting up user credentials..."
-          net user runneradmin "${{ github.event.inputs.password }}" /y
+          echo "runneradmin:${{ github.event.inputs.password }}" | sudo chpasswd
           
-          echo "configuring registry and firewall..."
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -value 1
+          # Allow password authentication for xrdp
+          sudo sed -i 's/allow_blank_password=false/allow_blank_password=true/g' /etc/xrdp/xrdp.ini
+          sudo systemctl restart xrdp
           
-          echo "rdp protocol enabled."
-          exit 0
+          echo "password configured."
+
+      - name: installing additional tools
+        run: |
+          echo "installing useful tools..."
+          sudo apt-get install -y htop nano curl wget net-tools
+          echo "tools installation complete."
 
       - name: maintaining connection
         run: |
@@ -57,9 +65,13 @@ jobs:
           echo "username: runneradmin"
           echo "password: ${{ github.event.inputs.password }}"
           echo "internal ip address:"
-          & "c:\program files\tailscale\tailscale.exe" ip -4
+          tailscale ip -4
+          echo ""
+          echo "to connect via rdp:"
+          echo "use the tailscale ip address above with any rdp client"
+          echo "port: 3389"
           echo "=========================================="
-          while ($true) {
-            echo "keep-alive: $(get-date)"
-            start-sleep -seconds 300
-          }
+          while true; do
+            echo "keep-alive: $(date)"
+            sleep 300
+          done
